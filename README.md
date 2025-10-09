@@ -1,50 +1,100 @@
-# Welcome to your Expo app 👋
+# Anonymous Chat
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Pequeña guía para configurar y ejecutar el proyecto (app Expo).
 
-## Get started
+## Resumen
 
-1. Install dependencies
+Este repositorio contiene una API en Node/Express con Socket.IO y una app cliente escrita con Expo (React Native). La comunicación en tiempo real se realiza por Socket.IO; la app crea un usuario aleatorio en el arranque y se autentica con un token retornado por la API.
 
-   ```bash
-   npm install
-   ```
+## Requisitos
 
-2. Start the app
+- Node.js (recomendado una versión reciente, p. ej. >= 18)
+- npm
+- Expo CLI / Expo Go para ejecutar la app (opcional si usas emuladores)
 
-   ```bash
-   npx expo start
-   ```
+## Instalación
 
-In the output, you'll find options to open the app in a
+1. Clona el repositorio y entra en la carpeta del proyecto.
+2. Instala dependencias:
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
+```powershell
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## Variables de entorno
 
-## Learn more
+Puedes crear un archivo `.env` en la raíz si quieres definir `PORT` o `JWT_SECRET`. El servidor por defecto usa `PORT=3000` y un `JWT_SECRET` por defecto (para desarrollo). En producción asegúrate de configurar `JWT_SECRET` seguro.
 
-To learn more about developing your project with Expo, look at the following resources:
+## Ejecutar la API
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+En la raíz del proyecto hay un script para levantar solo la API:
 
-## Join the community
+```powershell
+npm run start-api
+```
 
-Join our community of developers creating universal apps.
+La API corre por defecto en `http://localhost:3000` (o la IP/puerto que pongas en `PORT`). El archivo principal de la API está en `api/server.js` y la base de datos SQLite se guarda en `api/chat.db`.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Ejecutar la app (cliente)
+
+En otra terminal arranca Expo:
+
+```powershell
+npm start
+```
+
+Opciones útiles que muestra Expo:
+
+- `a` abrir en Android
+- `i` abrir en iOS (macOS)
+- Escanear QR con Expo Go (teléfono físico)
+
+### Nota sobre networking
+
+- Si ejecutas la app en un emulador Android clásico, la app no puede usar `localhost`. Usa `API_BASE` = `http://10.0.2.2:3000` en `app/index.tsx`.
+- En iOS simulator `localhost` suele funcionar.
+- En dispositivo físico usa la IP LAN de tu máquina, por ejemplo `http://192.168.1.11:3000`.
+
+Importante: la app cliente tiene una constante `API_BASE` en `app/index.tsx` que debes actualizar según tu entorno. Ejemplos:
+
+- Emulador Android (Android Studio):
+```ts
+const API_BASE = 'http://10.0.2.2:3000'
+```
+- iOS Simulator:
+```ts
+const API_BASE = 'http://localhost:3000'
+```
+- Dispositivo físico (ejemplo):
+```ts
+const API_BASE = 'http://192.168.1.11:3000'
+```
+
+Edita `app/index.tsx` y cambia la línea correspondiente antes de iniciar la app si es necesario.
+
+## Endpoints importantes
+
+- `POST /api/users/random` — crea un usuario aleatorio y devuelve un token JWT, username, color (la app usa esto al iniciar).
+- Socket.IO — la app conecta enviando `{ auth: { token } }` en el handshake; eventos:
+  - `chat:message` (emit): enviar mensaje desde el cliente: `{ message, createdAt }`.
+  - `chat:message` (on): recibir mensaje en tiempo real (el servidor retransmite a todos).
+
+## Notas rápidas
+
+- El token JWT se usa solo para autenticar el socket y las llamadas protegidas.
+- La app guarda `lastSeenAt` en Secure Store para recuperar mensajes pendientes; si prefieres puedes cambiar a AsyncStorage.
+
+## Troubleshooting
+
+- Si la app no recibe mensajes: revisa que `API_BASE` apunte correctamente al servidor.
+- Ver errores del servidor en la consola donde ejecutaste `npm run start-api` (morgan muestra logs de requests).
+
+## Siguientes mejoras sugeridas
+
+- Persistir token y reconectar automáticamente al reiniciar la app.
+- Añadir tests (supertest) para endpoints HTTP.
+- Mejorar la UI del cliente (mostrar color/avatar, estado de conexión, confirmación de entrega).
+
+Si quieres que genere un README más detallado con ejemplos de peticiones cURL o instrucciones de despliegue, dímelo y lo añado.
+
+This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
