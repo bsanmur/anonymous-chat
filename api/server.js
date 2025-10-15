@@ -58,25 +58,46 @@ io.on("connection", (socket) => {
 
   // Recibir y retransmitir mensaje
   socket.on("chat:message", (data) => {
-    const { message } = data;
+    // Expected payload from client: { id, type, content, created_at }
+    if (!data || typeof data !== "object") return;
 
-    // Validaciones básicas
-    if (!message || typeof message !== "string" || message.trim().length === 0) {
-      return;
-    }
+    const incomingId =
+      typeof data.id === "string" && data.id.trim() !== ""
+        ? data.id.trim()
+        : null;
+    const type = typeof data.type === "string" ? data.type.trim() : "text";
+    const content = typeof data.content === "string" ? data.content : null;
+    const createdAt =
+      typeof data.created_at === "string" && data.created_at.trim() !== ""
+        ? data.created_at.trim()
+        : new Date().toISOString();
 
-    if (message.length > 5000) {
-      return; // Mensaje demasiado largo
-    }
+    // Basic validations
+    if (!content || content.length === 0) return;
+    if (content.length > 2000000) return; // protect against extremely large payloads
+
+    // Ensure id and created_at exist; accept client's id if provided (useful for dedup)
+    const msgId = incomingId || crypto.randomUUID();
+    const msgCreatedAt = createdAt;
 
     const msg = {
-      id: crypto.randomUUID(),
-      username: socket.username,
-      content: message.trim(),
-      created_at: new Date().toISOString(),
+      id: msgId,
+      username: socket.username, // enforce server-side username
+      type: type === "image" ? "image" : "text",
+      content: content,
+      created_at: msgCreatedAt,
     };
 
-    console.log(`💬 Mensaje de ${msg.username}: ${msg.content}`);
+    // Log summary
+    if (msg.type === "text") {
+      console.log(
+        `💬 Mensaje de ${msg.username}: ${String(msg.content).slice(0, 200)}`
+      );
+    } else {
+      console.log(
+        `�️ Imagen recibida de ${msg.username} (id=${msg.id}, size=${msg.content.length} bytes approx)`
+      );
+    }
 
     // Retransmitir a TODOS los clientes conectados (incluyendo el emisor)
     io.emit("chat:message", msg);

@@ -11,6 +11,8 @@ import {
 } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { io, Socket } from "socket.io-client";
+import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system/legacy";
 
 const API_BASE = "http://192.168.1.12:3000";
 
@@ -52,10 +54,17 @@ export default function Index() {
           id TEXT PRIMARY KEY,
           username TEXT NOT NULL,
           content TEXT NOT NULL,
+          type TEXT DEFAULT 'text',
           created_at TEXT NOT NULL,
           is_own INTEGER DEFAULT 0
         );
       `);
+      // Intentar agregar columna `type` en instalaciones antiguas (ignorar error si ya existe)
+      try {
+        await db.execAsync(`ALTER TABLE messages ADD COLUMN type TEXT DEFAULT 'text'`);
+      } catch (e) {
+        // probable que la columna ya exista; seguir
+      }
 
       console.log("✅ Base de datos local inicializada");
       return db;
@@ -72,20 +81,31 @@ export default function Index() {
         "SELECT * FROM messages ORDER BY created_at DESC LIMIT 100"
       );
 
-      const loadedMessages: MessageType.Text[] = rows.map((row: any) => {
-        const parts = row.username.split(" ");
-        return {
-          author: {
-            id: row.is_own ? userId : row.username,
-            firstName: parts[0] || "",
-            lastName: parts[1] || "",
-          },
-          createdAt: new Date(row.created_at).getTime(),
-          id: row.id,
-          text: row.content,
-          type: "text",
-        };
-      });
+      const loadedMessages: MessageType.Text[] = rows
+        .map((row: any) => {
+          const parts = row.username.split(" ");
+          // Soportar mensajes de imagen y texto
+          if (row.type === "image") {
+            return null; // Skip non-text messages
+          }
+
+          if (row.type === "text" && row.content) {
+            return {
+              author: {
+                id: row.is_own ? userId : row.username,
+                firstName: parts[0] || "",
+                lastName: parts[1] || "",
+              },
+              createdAt: new Date(row.created_at).getTime(),
+              id: row.id,
+              text: row.content,
+              type: "text",
+            } as MessageType.Text;
+          }
+
+          return null; // Skip invalid messages
+        })
+        .filter((message): message is MessageType.Text => message !== null);
 
       setMessages(loadedMessages);
       console.log(`📚 Cargados ${loadedMessages.length} mensajes locales`);
@@ -97,16 +117,17 @@ export default function Index() {
   // Guardar mensaje en SQLite local
   const saveMessageLocally = async (
     msg: any,
-    isOwn: boolean = false
+    isOwn: boolean = false,
+    type: string = "text"
   ) => {
     const db = dbRef.current;
     if (!db) return;
 
     try {
       await db.runAsync(
-        `INSERT OR REPLACE INTO messages (id, username, content, created_at, is_own)
-         VALUES (?, ?, ?, ?, ?)`,
-        [msg.id, msg.username, msg.content, msg.created_at, isOwn ? 1 : 0]
+        `INSERT OR REPLACE INTO messages (id, username, content, type, created_at, is_own)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [msg.id, msg.username, msg.content, type, msg.created_at, isOwn ? 1 : 0]
       );
       console.log("💾 Mensaje guardado localmente");
     } catch (err) {
@@ -162,6 +183,37 @@ export default function Index() {
         const isOwn = m.username === user;
         const parts = m.username.split(" ");
 
+        // Soportar imagenes
+        if (m.type === "image" && m.content) {
+          try {
+            // Guardar base64 recibido en caché como archivo
+            const cacheDir = `${FileSystem.documentDirectory}images/`;
+            await FileSystem.makeDirectoryAsync(cacheDir, { intermediates: true });
+            const filename = `${m.id}.jpg`;
+            const path = `${cacheDir}${filename}`;
+            await FileSystem.writeAsStringAsync(path, m.content, { encoding: FileSystem.EncodingType.Base64 });
+
+            const imageMsg: MessageType.Any = {
+              author: {
+                id: isOwn ? user : m.username,
+                firstName: parts[0] || "",
+                lastName: parts[1] || "",
+              },
+              createdAt: new Date(m.created_at).getTime(),
+              id: m.id,
+              type: "image",
+              uri: path,
+            } as any;
+
+            addMessage(imageMsg);
+            // Guardar referencia local (uri) en SQLite
+            await saveMessageLocally({ id: m.id, username: m.username, content: path, created_at: m.created_at }, isOwn, "image");
+          } catch (e) {
+            console.error("❌ Error guardando imagen recibida:", e);
+          }
+          return;
+        }
+
         const incoming: MessageType.Text = {
           author: {
             id: isOwn ? user : m.username,
@@ -175,9 +227,8 @@ export default function Index() {
         };
 
         addMessage(incoming);
-        
         // Guardar en SQLite local
-        await saveMessageLocally(m, isOwn);
+        await saveMessageLocally(m, isOwn, "text");
       });
     } catch (err) {
       console.error("❌ Error conectando socket:", err);
@@ -187,9 +238,72 @@ export default function Index() {
   const handleSendPress = (message: MessageType.PartialText) => {
     const s = socketRef.current;
     if (s && s.connected) {
+      // Enviar como tipo text para consistencia
       s.emit("chat:message", {
-        message: message.text,
+        type: "text",
+        content: message.text,
       });
+    }
+  };
+
+  // Enviar imagen: elegir, copiar a cache, enviar base64 y guardar localmente
+  const handleSendImage = async () => {
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) return;
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.8,
+        base64: false,
+      });
+
+      if (result.canceled) return;
+      const pickedUri = result.assets && result.assets.length > 0 ? result.assets[0].uri : null;
+      if (!pickedUri) return;
+
+      // Copiar a cache con nombre único
+      const cacheDir = `${FileSystem.cacheDirectory}images/`;
+      await FileSystem.makeDirectoryAsync(cacheDir, { intermediates: true });
+      const id = Crypto.randomUUID();
+      const ext = pickedUri.split(".").pop() || "jpg";
+      const localPath = `${cacheDir}${id}.${ext}`;
+      await FileSystem.copyAsync({ from: pickedUri, to: localPath });
+
+      // Leer como base64 para enviar al servidor (para que otros puedan obtenerla)
+      const b64 = await FileSystem.readAsStringAsync(localPath, { encoding: FileSystem.EncodingType.Base64 });
+
+      const s = socketRef.current;
+      const created_at = new Date().toISOString();
+      const payload = {
+        id,
+        username,
+        type: "image",
+        content: b64,
+        created_at,
+      };
+
+      // Mostrar inmediatamente en la UI (local)
+      const localMsg: MessageType.Any = {
+        author: {
+          id: userId,
+          firstName: username.split(" ")[0],
+          lastName: username.split(" ")[1] || "",
+        },
+        createdAt: new Date(created_at).getTime(),
+        id,
+        type: "image",
+        uri: localPath,
+      } as any;
+      addMessage(localMsg);
+      // Guardar en DB local como referencia
+      await saveMessageLocally({ id, username, content: localPath, created_at }, true, "image");
+
+      if (s && s.connected) {
+        s.emit("chat:message", payload);
+      }
+    } catch (e) {
+      console.error("❌ Error enviando imagen:", e);
     }
   };
 
@@ -276,7 +390,9 @@ export default function Index() {
       >
         <View style={styles.header}>
           <Text style={styles.username}>{username}</Text>
-          <View style={{ marginLeft: "auto" }}>
+          <View style={{ marginLeft: "auto", flexDirection: "row" }}>
+            <Button title="Imagen" onPress={handleSendImage} />
+            <View style={{ width: 8 }} />
             <Button title="Nuevo Usuario" onPress={handleNewUser} />
           </View>
         </View>
