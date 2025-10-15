@@ -23,7 +23,7 @@ app.use(morgan("dev"));
 const db = new sqlite3.Database("./api/chat.db", (err) => {
   if (err) console.error("Error al abrir SQLite:", err);
   else {
-    console.log("🗄️  Base de datos SQLite conectada.");
+    console.log("Base de datos SQLite conectada.");
     db.run(
       `CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
